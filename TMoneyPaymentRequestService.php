@@ -60,7 +60,8 @@ class TMoneyPaymentRequestService extends PaymentRequestService{
         $tmoney_switch_client->setReferenceNo($request->getTransactionID() . $request->getModuleCode());
 
         $tmoney_switch_client->setTransactionID($request->getTransactionID());
-
+        
+        
         if( $account = $request->getOption()->getValue('bank_account') )
             $tmoney_switch_client->setAccountNo($account);
         if( $receiver_fullname = $request->getOption()->getValue('account_holder_name') )
@@ -85,8 +86,8 @@ class TMoneyPaymentRequestService extends PaymentRequestService{
             $tmoney_switch_client->setReceiverBirthDate($receiver_birth_date);
         if( $receiver_email = $request->getOption()->getValue('receiver_email') )
             $tmoney_switch_client->setReceiverEmail($receiver_email);
-
-
+        
+        
         if( $landed_currency = $request->getOption()->getValue('landed_currency') )
             $tmoney_switch_client->setLandedCurrency($landed_currency);
 
@@ -116,8 +117,8 @@ class TMoneyPaymentRequestService extends PaymentRequestService{
         if( !$v->fails() )
         {
 
-            $request->setStatus(PaymentRequestStatus::PENDING);
-            return true;
+               $request->setStatus(PaymentRequestStatus::PENDING);
+               return true;
 
         }
 
@@ -144,11 +145,8 @@ class TMoneyPaymentRequestService extends PaymentRequestService{
             return false;
         }
 
-        $tmoney_switch_client->setResponseFields($request->getResponse()->toArray());
-
         $response = $tmoney_switch_client->bankTransfer() ;
         $request->getResponse()->setJson(json_encode(array("TMoney Bank Transfer"=>$tmoney_switch_client->getTransactionType())));
-
 
         if($response )
         {
@@ -157,7 +155,7 @@ class TMoneyPaymentRequestService extends PaymentRequestService{
 
             //save selected sent and return data tmoney , need to compare with tmoney if fail during process
             $request->getResponse()->add('tmoney_process', $tmoney_switch_client->getTmoneyInfo());
-            //$request->setReferenceID($tmoney_switch_client->getSwitcherReferenceNo()); //refNo once sent transfer
+            $request->setReferenceID($tmoney_switch_client->getSwitcherReferenceNo()); //refNo once sent transfer
 
             if( $result ) {
                 $request->setReferenceID($response->getRefNoSwitcher()); //refNO from payment return
@@ -201,72 +199,49 @@ class TMoneyPaymentRequestService extends PaymentRequestService{
             $this->setResponseCode(MessageCode::CODE_INVALID_SWITCH_SETTING);
             return false;
         }
-        //get last info
-        $tmoney_switch_client->setResponseFields($request->getResponse()->toArray());
-
-        $last_response = $request->getResponse()->toArray() ;
-
-        if(array_key_exists("tmoney_response",$last_response)) {
-
-            $tmoney_response = $last_response["tmoney_response"];
-            $tmoney_response_arr = json_decode($tmoney_response,true) ;
-
-            if(array_key_exists("resultCode",$tmoney_response_arr)) {
-
-                if ($tmoney_response_arr["resultCode"] == "PRC"  || $tmoney_response_arr["resultCode"] == "PB-001") {
-                    if ($response = $tmoney_switch_client->bankTransfer()) {
-                        $ori_request = clone($request);
-
-                        $result = $this->_checkResponse($request, $response);
-                        $this->getRepository()->startDBTransaction();
-                        if ($result) {
-
-                            if ($complete = parent::_completeAction($request)) {
-                                $request->getResponse()->setJson(json_encode(array("TMoney Bank Transfer" => $tmoney_switch_client->getTransactionType())));
-                                $request->getResponse()->add('tmoney_response', $response->getFormattedResponse());
-                                $request->getResponse()->add('tmoney_process', $tmoney_switch_client->getTmoneyInfo());
-                                $request->setReferenceID($response->getRefNoSwitcher());
-
-                                if (parent::_updatePaymentRequestStatus($request, $ori_request)) {
-                                    $this->getRepository()->completeDBTransaction();
-                                    $this->setResponseCode(MessageCode::CODE_REQUEST_COMPLETED);
-                                    return true;
-                                } else {
-                                    Logger::debug("reprocessRequest failed");
-                                    $this->getRepository()->rollbackDBTransaction();
-                                    $this->setResponseCode(MessageCode::CODE_PAYMENT_REQUEST_FAIL); //***
-                                    return false;
-                                }
-                            }
-                        } else {//failed or still processing
 
 
-                            $request->getResponse()->setJson(json_encode(array("TMoney Bank Transfer" => $tmoney_switch_client->getTransactionType())));
-                            $request->getResponse()->add('tmoney_response', $response->getFormattedResponse());
-                            $request->getResponse()->add('tmoney_process', $tmoney_switch_client->getTmoneyInfo());
+        if($response = $tmoney_switch_client->inquiry() ) {
+            $ori_request = clone($request);
 
 
-                            if ($request->getStatus() == PaymentRequestStatus::FAIL) {
-                                $this->setResponseMessage($response->getRemarks());
-                                $request->setFail();
-                                $this->getRepository()->updateResponse($request);
-                                $this->getRepository()->completeDBTransaction();
-                                return true;
-                            } elseif ($request->getStatus() == PaymentRequestStatus::PENDING) {
-                                $this->getRepository()->updateResponse($request);
-                                $this->getRepository()->completeDBTransaction();
-                                return false;
-                            }
-                        }
+            $result = $this->_checkResponse($request, $response);
+
+            $this->getRepository()->startDBTransaction();
+            if ($result) {
+                if ($complete = parent::_completeAction($request)) {
+                    $request->getResponse()->setJson(json_encode(array("reprocess"=>$tmoney_switch_client->getTransactionType())));
+                    $request->getResponse()->add('tmoney_response', $response->getFormattedResponse());
+                    $request->setReferenceID($response->getInvoiceNo());
+
+                    if (parent::_updatePaymentRequestStatus($request, $ori_request)) {
+                        $this->getRepository()->completeDBTransaction();
+                        $this->setResponseCode(MessageCode::CODE_REQUEST_COMPLETED);
+                        return true;
+                    } else {
+                        Logger::debug("reprocessRequest failed");
                         $this->getRepository()->rollbackDBTransaction();
-
-
+                        $this->setResponseCode(MessageCode::CODE_PAYMENT_REQUEST_FAIL); //***
+                        return false;
                     }
                 }
+            } else {//failed or still processing
+                $request->getResponse()->setJson(json_encode(array("reprocess"=>$tmoney_switch_client->getTransactionType())));
+                $request->getResponse()->add('tmoney_response', $response->getFormattedResponse());
+                if ($request->getStatus() == PaymentRequestStatus::FAIL) {
+                    $this->setResponseMessage($response->getRemarks());
+                    $request->setFail();
+                    $this->getRepository()->updateResponse($request);
+                    $this->getRepository()->completeDBTransaction();
+                    return true;
+                }elseif (in_array($response->getResponseStatus(), array(TMoneySwitchFunction::TMONEY_STATUS_OUTSTANDING, TMoneySwitchFunction::BDO_STATUS_INPROCESS))) {
+                    $this->getRepository()->updateResponse($request);
+                    $this->getRepository()->completeDBTransaction();
+                    return false;
+                }
             }
-
         }
-        $this->setResponseCode(MessageCode::CODE_PAYMENT_REQUEST_FAIL);
+        $this->getRepository()->rollbackDBTransaction();
         return false;
     }
 
@@ -289,11 +264,11 @@ class TMoneyPaymentRequestService extends PaymentRequestService{
 
 
         if($response = $tmoney_switch_client->inquiry() ) {   //add for tmoney only
-            if (!$response->getResponseCode() == '0') {
+           if (!$response->getResponseCode() == '0') {
                 return false;
             }
 
-            return $response;
+           return $response;
         }
         return false;
     }
